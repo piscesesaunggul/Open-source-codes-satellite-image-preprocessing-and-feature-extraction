@@ -1,0 +1,101 @@
+# Assign a variable to access collection of remote sensing images
+variable = ee.ImageCollection('Remote sensing data ID')
+
+# Filter remote sensing data by cloud
+Variable = variable.filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 30))
+
+# Filter remote sensing data by date
+Variable = variable.filterDate('start date', 'end date')
+
+# Filter remote sensing data by area
+Variable = variable.filterBounds(variable_area)
+
+
+# Assign a variable to access asset of field observation
+Variable_A = ee.FeatureCollection('Asset ID')
+Variable_B = ee.FeatureCollection('Asset ID')
+
+# In case for merge partition of field observation
+Combine_var = variable_A.merge(variable_B)
+
+
+
+# Function of cloud removal and radiometric
+# correction for Sentinel 2 MSI
+def preprocess(image):
+    scl = image.select('SCL')
+    qa = image.select('QA60')
+    cloudProb = image.select('MSK_CLDPRB')
+
+    # Bits 10 and 11 are clouds and cirrus from QA60 Band, respectively
+    cloud   = int(2**10)
+    cirrus  = int(2**11)
+
+    # Selecting pixels with 0% Cloud Probability and Cover Prediction of
+    # Cirrus and Shadow from SCL Band
+    cl_prob = cloudProb.eq(0)
+    cir_prob = scl.eq(10).And(scl.eq(9)).And(scl.eq(8)).And(scl.eq(7))
+    shadow = scl.eq(3)
+
+    # Both flags should be set to zero, indicating clear conditions
+    masked = qa.bitwiseAnd(cloud).eq(0).And(qa.bitwiseAnd(cirrus).eq(0))
+    mask = cl_prob.And(cir_prob.neq(1)).And(shadow.neq(1))
+
+    return image.updateMask(masked).updateMask(mask).divide(10000)
+
+
+# Function of sun glint correction as proposed by Lyzenga et. al. (2006)
+def sun_glint(image):
+  bands = ['B2','B3','B4']
+  mean = ee.Reducer.mean()
+  cov = ee.Reducer.covariance()
+  nir = image.select('B8')
+  nir_hat  = nir.reduceRegion(reducer=mean,geometry=bound).get('B8')
+
+  for i in bands:
+    arr      = image.select([i,'B8']).toArray()
+    varcov   = ee.Array(arr.reduceRegion(reducer=cov,geometry=bound).get('array'))
+    corr     = nir.subtract(ee.Image(nir_hat))
+    rho      = ee.Image(varcov.get([0,1])).divide(ee.Image(varcov.get([1,1])))
+    img_corr = image.select(i).subtract(corr.multiply(rho))
+
+    image.addBands(img_corr, None, True)
+
+  return image
+
+
+
+# Assign a function to compute depth invariant bottom index for
+# each image on image collection
+def water_corr(image):
+  dii12 = image.select('B2').divide(image.select('B3')).rename('D12')
+  dii13 = image.select('B2').divide(image.select('B4')).rename('D13')
+  dii23 = image.select('B3').divide(image.select('B4')).rename('D23')
+
+  return image.addBands(dii12, None, True)
+
+
+
+# Assign a function to compute normalized difference vegetation index for
+# each image on image collection
+def NDVI(image):
+  red = 'B4'
+  nir = 'B8'
+  ndvi = image.normalizedDifference([nir, red]).rename('ndvi')
+
+  return image.addBands(ndvi, None, True)
+
+
+
+# Assign a function to compute normalized difference water index for
+# each image on image collection
+def NDWI(image):
+  green = 'B3'
+  nir = 'B8'
+  ndwi = image.normalizedDifference([green, nir]).rename('ndwi')
+
+  return image.addBands(ndwi, None, True)
+
+
+
+
